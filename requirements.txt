@@ -1,4 +1,5 @@
 opencv-python
-google-generativeai
+ultralytics
 requests
 python-dotenv
+
