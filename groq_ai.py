@@ -1,3 +1,10 @@
+"""
+DEPRECATED: This module is no longer used in the main application.
+The system now uses Vertex AI (vertex_ai.py) as the primary reasoning model.
+
+This file is kept for reference only.
+"""
+
 import os
 import time
 from typing import Any

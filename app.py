@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 from camera import get_frames
 from elevenlabs_tts import speak
-from groq_ai import describe_scene
+from vertex_ai import describe_scene
 from yolo_detector import YoloDetector
 
 load_dotenv()
@@ -85,7 +85,7 @@ def main():
     recent_label_sets: "deque[set[str]]" = deque(maxlen=max(1, smoothing_window))
 
     force_narration_every_s = float(os.getenv("FORCE_NARRATION_EVERY_S", "0"))
-    last_groq_ts: float = 0.0
+    last_ai_ts: float = 0.0
 
     stop_event = threading.Event()
     tts_queue: "queue.Queue[str]" = queue.Queue(maxsize=2)
@@ -124,7 +124,7 @@ def main():
 
     def process_frame(frame) -> str | None:
         nonlocal last_detection_key
-        nonlocal last_groq_ts
+        nonlocal last_ai_ts
 
         detections = detector.detect(frame)
         if not detections:
@@ -152,10 +152,10 @@ def main():
 
         with last_detection_key_lock:
             if last_detection_key == detection_key:
-                if force_narration_every_s > 0 and (time.time() - last_groq_ts) >= force_narration_every_s:
+                if force_narration_every_s > 0 and (time.time() - last_ai_ts) >= force_narration_every_s:
                     pass
                 else:
-                    print("[app] detections unchanged; skipping Groq")
+                    print("[app] detections unchanged; skipping AI")
                     return None
 
         text = describe_scene(stable_detections)
@@ -165,7 +165,7 @@ def main():
         with last_detection_key_lock:
             last_detection_key = detection_key
 
-        last_groq_ts = time.time()
+        last_ai_ts = time.time()
 
         return text
 
@@ -243,7 +243,7 @@ def main():
                     last_enqueue_ts = now
                     last_enqueued_text = text
                     last_enqueued_detection_key = current_key
-                    print(f"[groq] {text}")
+                    print(f"[vertex] {text}")
 
                 pending.add_done_callback(_on_done)
 
