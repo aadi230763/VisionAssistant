@@ -72,6 +72,10 @@ class YoloDetector:
                         "direction": direction,
                         "depth_value": median_depth
                     }
+                    
+                    # Concise depth logging with emoji indicators
+                    emoji = {"very_close": "🔴", "close": "🟠", "moderate": "🟡", "far": "🟢"}.get(distance_bucket, "⚪")
+                    print(f"  {emoji} {label.upper()}: {median_depth:.2f} [{distance_bucket}] → {direction}")
                 except Exception as e:
                     print(f"[yolo] depth integration error: {e}")
             

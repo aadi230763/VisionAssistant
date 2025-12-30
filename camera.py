@@ -9,11 +9,11 @@ def get_frames(camera_index: int = 0):
     for backend in [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY]:
         cap = cv2.VideoCapture(camera_index, backend)
         if cap.isOpened():
-            print(f"[camera] opened with backend {backend}")
+            print(f"📹 Camera opened successfully\\n")
             break
     
     if cap is None or not cap.isOpened():
-        print(f"[camera] failed to open camera {camera_index}")
+        print(f"❌ Failed to open camera {camera_index}")
         return
     
     try:

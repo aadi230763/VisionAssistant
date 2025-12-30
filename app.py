@@ -3,9 +3,14 @@ import queue
 import threading
 import time
 import re
+import warnings
 from collections import Counter, deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from difflib import SequenceMatcher
+
+# Suppress warnings for cleaner output
+warnings.filterwarnings('ignore', category=FutureWarning)
+warnings.filterwarnings('ignore', category=UserWarning)
 
 from dotenv import load_dotenv
 
@@ -61,10 +66,10 @@ def _tts_worker(stop_event: threading.Event, tts_queue: "queue.Queue[str]"):
                 continue
 
             if last_spoken_text and _is_similar(text, last_spoken_text):
-                print("[tts] similar to last narration; skipping")
+                print("⏭️  Skipping: Similar to last narration")
                 continue
 
-            print(f"[tts] speaking: {text}")
+            print(f"🔊 Speaking: {text}")
             speak(text)
             last_spoken_text = text
             last_spoken_ts = now
@@ -73,7 +78,9 @@ def _tts_worker(stop_event: threading.Event, tts_queue: "queue.Queue[str]"):
 
 
 def main():
-    print("[app] Vision-to-Voice Assistant started")
+    print("\n" + "="*60)
+    print("🎯 VISION-TO-VOICE ASSISTANT")
+    print("="*60)
 
     process_every_n_frames = int(os.getenv("PROCESS_EVERY_N_FRAMES", "15"))
     yolo_model = os.getenv("YOLO_MODEL", "yolo11n.pt")
@@ -81,12 +88,12 @@ def main():
     use_depth = os.getenv("USE_DEPTH_ESTIMATION", "true").lower() == "true"
     depth_enabled = False
     if use_depth:
-        print("[app] Initializing depth estimation...")
+        print("\n🔍 Initializing depth estimation...")
         depth_enabled = initialize_depth_model("midas_small")
         if depth_enabled:
-            print("[app] Depth estimation enabled")
+            print("✅ Depth estimation enabled")
         else:
-            print("[app] Depth estimation failed, continuing without depth")
+            print("⚠️  Depth estimation failed, continuing without depth")
     
     yolo_conf = float(os.getenv("YOLO_CONF", "0.35"))
 
@@ -129,14 +136,7 @@ def main():
             jacc = len(sa & sb) / max(1, len(sa | sb))
             if jacc >= 0.8:
                 return True
-        # Estimate depth if enabled
-        depth_map = None
-        if depth_enabled:
-            depth_map = estimate_depth(frame)
-            if depth_map is None:
-                print("[app] depth estimation failed for this frame")
-
-        detections = detector.detect(frame, depth_map=depth_map)
+        return False
 
     last_detection_key_lock = threading.Lock()
     last_detection_key: tuple | None = None
@@ -145,9 +145,16 @@ def main():
         nonlocal last_detection_key
         nonlocal last_ai_ts
 
-        detections = detector.detect(frame)
+        # Estimate depth if enabled
+        depth_map = None
+        if depth_enabled:
+            depth_map = estimate_depth(frame)
+            if depth_map is None:
+                print("[app] depth estimation failed for this frame")
+
+        detections = detector.detect(frame, depth_map=depth_map)
         if not detections:
-            print("[yolo] no detections")
+            print("👁️  No objects detected")
             recent_label_sets.append(set())
             return None
 
@@ -177,12 +184,12 @@ def main():
                 if force_narration_every_s > 0 and (time.time() - last_ai_ts) >= force_narration_every_s:
                     pass
                 else:
-                    print("[app] detections unchanged; skipping AI")
+                    print("⏭️  Scene unchanged, skipping AI")
                     return None
             
             # If urgent hazard, always process regardless of detection key
             if has_urgent_hazard:
-                print("[app] URGENT: Very close hazard detected")
+                print("\n🚨 URGENT: Very close hazard detected!")
 
         text = describe_scene(stable_detections)
         if not text:
@@ -210,7 +217,9 @@ def main():
             if pending is not None and not pending.done():
                 continue
 
-            print(f"[app] processing frame {frame_idx}")
+            print(f"\n{'='*60}")
+            print(f"📹 Frame {frame_idx}")
+            print(f"{'='*60}")
             pending = executor.submit(process_frame, frame.copy())
 
             if pending.done():
@@ -270,7 +279,7 @@ def main():
                     last_enqueue_ts = now
                     last_enqueued_text = text
                     last_enqueued_detection_key = current_key
-                    print(f"[vertex] {text}")
+                    print(f"\n💬 AI: {text}")
 
                 pending.add_done_callback(_on_done)
 

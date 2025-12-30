@@ -6,11 +6,19 @@ for detected objects. Enhances spatial awareness without claiming precision.
 """
 
 import os
+import sys
+import warnings
 from typing import Optional
 
 import cv2
 import numpy as np
 from dotenv import load_dotenv
+
+# Suppress all warnings for cleaner output
+warnings.filterwarnings('ignore')
+
+# Suppress torch.hub verbose output
+os.environ['TORCH_HOME'] = os.path.expanduser('~/.cache/torch')
 
 load_dotenv()
 
@@ -27,17 +35,21 @@ _model_type: Optional[str] = None
 def _load_midas_small():
     """Load MiDaS small model (lightweight, good for CPU)."""
     import torch
+    from contextlib import redirect_stdout, redirect_stderr
+    import io
     
-    model = torch.hub.load("intel-isl/MiDaS", "MiDaS_small", trust_repo=True)
-    model.eval()
-    
-    # Move to GPU if available
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
-    
-    # Get transform
-    midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms", trust_repo=True)
-    transform = midas_transforms.small_transform
+    # Suppress all torch.hub output
+    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        model = torch.hub.load("intel-isl/MiDaS", "MiDaS_small", trust_repo=True, verbose=False)
+        model.eval()
+        
+        # Move to GPU if available
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model.to(device)
+        
+        # Get transform
+        midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms", trust_repo=True, verbose=False)
+        transform = midas_transforms.small_transform
     
     return model, transform, device
 
@@ -90,6 +102,14 @@ def estimate_depth(frame: np.ndarray) -> Optional[np.ndarray]:
     
     try:
         import torch
+        import warnings
+        
+        # Suppress verbose torch.hub messages
+        warnings.filterwarnings('ignore', category=UserWarning)
+        
+        # Suppress torch.hub verbose output
+        import os
+        _old_verbosity = torch.hub._get_torch_home()
         
         # Convert BGR to RGB
         img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -97,7 +117,9 @@ def estimate_depth(frame: np.ndarray) -> Optional[np.ndarray]:
         # Apply transform and prepare batch
         if _model_type == "midas_small":
             # Get transform (stored during initialization)
-            midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms", trust_repo=True)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms", trust_repo=True, verbose=False)
             transform = midas_transforms.small_transform
             
             input_batch = transform(img_rgb)
@@ -177,7 +199,17 @@ def compute_bbox_depth(depth_map: np.ndarray, bbox: tuple) -> tuple[float, str]:
     
     # Use median (robust to outliers)
     median_depth = float(np.median(region))
+    
+    # Also compute mean and std for debugging
+    mean_depth = float(np.mean(region))
+    std_depth = float(np.std(region))
+    min_depth = float(np.min(region))
+    max_depth = float(np.max(region))
+    
     bucket = get_distance_bucket(median_depth)
+    
+    # Debug logging (commented out for cleaner output)
+    # print(f"[depth_bbox] median={median_depth:.3f}, mean={mean_depth:.3f}, std={std_depth:.3f}, range=[{min_depth:.3f}-{max_depth:.3f}]")
     
     return median_depth, bucket
 
