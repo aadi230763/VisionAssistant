@@ -57,6 +57,7 @@ class YoloDetector:
             
             # Get bounding box coordinates
             bbox = box.xyxy[0].cpu().numpy() if hasattr(box.xyxy[0], 'cpu') else box.xyxy[0]
+            bbox_list = [float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])]
             
             # Add depth information if available
             depth_info = {}
@@ -84,6 +85,7 @@ class YoloDetector:
                 aggregated[label] = {
                     "label": label,
                     "confidence": conf,
+                    "bbox": bbox_list,  # Include bbox for ANI tracking
                     **depth_info
                 }
 

@@ -64,6 +64,27 @@ def _format_detections(detections: list[dict[str, Any]], max_items: int = 10) ->
     return "\n".join(lines)
 
 
+def _format_ani_assessments(assessments: list[dict[str, Any]]) -> str:
+    """Format ANI risk assessments for the AI prompt (anticipatory mode)."""
+    if not assessments:
+        return "No moving objects or risks detected."
+    
+    lines: list[str] = []
+    for a in assessments:
+        label = str(a.get("label", "object")).strip() or "object"
+        direction = a.get("direction", "unknown")
+        distance = a.get("distance", "unknown")
+        motion = a.get("motion", "stationary")
+        risk = a.get("risk", "low")
+        
+        # Format: "Person (ahead, close) - approaching - RISK: HIGH"
+        lines.append(
+            f"- {label.title()} ({direction}, {distance}) - {motion} - RISK: {risk.upper()}"
+        )
+    
+    return "\n".join(lines)
+
+
 def _has_very_close_hazard(detections: list[dict[str, Any]]) -> bool:
     """Check if any detection is very close and safety-relevant."""
     from depth_estimator import is_safety_relevant
@@ -74,9 +95,15 @@ def _has_very_close_hazard(detections: list[dict[str, Any]]) -> bool:
     return False
 
 
+def _has_imminent_risk(assessments: list[dict[str, Any]]) -> bool:
+    """Check if any ANI assessment indicates imminent risk."""
+    return any(a.get("risk") == "imminent" for a in assessments)
+
+
 def describe_scene(
     detections: list[dict[str, Any]],
     *,
+    ani_assessments: Optional[list[dict[str, Any]]] = None,
     timeout_s: float = 12.0,
     retries: int = 2,
 ) -> Optional[str]:
@@ -87,6 +114,7 @@ def describe_scene(
     
     Args:
         detections: List of YOLO detection dicts with 'label' and 'confidence' keys
+        ani_assessments: Optional ANI risk assessments (anticipatory mode)
         timeout_s: Maximum time to wait for response
         retries: Number of retry attempts on transient errors
     
@@ -96,8 +124,11 @@ def describe_scene(
     if not detections:
         return None
     
+    # Determine mode: ANI (anticipatory) or standard
+    use_ani = ani_assessments is not None and len(ani_assessments) > 0
+    
     # Check for very close hazards (SAFETY OVERRIDE)
-    has_urgent_hazard = _has_very_close_hazard(detections)
+    has_urgent_hazard = _has_very_close_hazard(detections) if not use_ani else _has_imminent_risk(ani_assessments)
     
     # Check for emergency situations (high priority)
     emergency_objects = {
@@ -113,7 +144,61 @@ def describe_scene(
         has_emergency = True
     
     # Build the prompt - optimized for actionable navigation guidance
-    if has_emergency:
+    if use_ani:
+        # ANI MODE: Anticipatory, motion-aware guidance
+        if has_urgent_hazard:
+            # Imminent risk detected by ANI
+            prompt = (
+                "You are an assistive AI for visually impaired people with PREDICTIVE safety intelligence.\n"
+                "IMMINENT collision risk detected based on object motion. Provide IMMEDIATE anticipatory guidance.\n\n"
+                "URGENT RULES:\n"
+                "1. Start with 'Warning' or 'Caution'\n"
+                "2. Use predictive language: 'approaching', 'about to cross', 'moving toward you'\n"
+                "3. State object, direction, and motion\n"
+                "4. Give ONE immediate action: 'Stop', 'Step back', 'Pause'\n"
+                "5. Be firm but calm - this is predicted danger\n"
+                "6. Maximum 2 sentences\n\n"
+                "MOTION TYPES:\n"
+                "- approaching: Moving toward you\n"
+                "- crossing: Moving across your path\n"
+                "- moving: In motion but not toward you\n"
+                "- stationary: Not moving\n\n"
+                "RISK LEVELS:\n"
+                "- IMMINENT: Collision likely within 1-2 seconds\n"
+                "- HIGH: Significant risk if you continue\n"
+                "- MEDIUM: Potential risk, proceed with caution\n\n"
+                "EXAMPLES:\n"
+                "- 'Warning. Person approaching directly ahead. Please stop and wait.'\n"
+                "- 'Caution. Bicycle crossing from the left. Pause briefly.'\n"
+                "- 'Warning. Vehicle approaching from your right. Step back immediately.'\n\n"
+                f"Motion-based risk assessments:\n{_format_ani_assessments(ani_assessments)}\n\n"
+                "Provide urgent anticipatory guidance:"
+            )
+        else:
+            # Normal ANI mode with motion awareness
+            prompt = (
+                "You are an assistive AI for visually impaired people with ANTICIPATORY intelligence.\n"
+                "Provide proactive navigation guidance based on predicted object motion.\n\n"
+                "ANTICIPATORY RULES:\n"
+                "1. Focus on objects in motion, not static environment\n"
+                "2. Use predictive language when appropriate:\n"
+                "   - 'approaching' for objects moving toward you\n"
+                "   - 'crossing your path' for lateral motion\n"
+                "   - 'moving away' for objects leaving\n"
+                "3. Provide anticipatory suggestions:\n"
+                "   - 'slow down' if medium risk ahead\n"
+                "   - 'keep left/right' to avoid crossing objects\n"
+                "   - 'pause briefly' if path may clear\n"
+                "4. Be calm and reassuring\n"
+                "5. Maximum 2 sentences\n\n"
+                "MOTION AWARENESS:\n"
+                "- approaching: 'A person is approaching from ahead. Slow down.'\n"
+                "- crossing: 'Someone is about to cross from your left. Keep slightly right.'\n"
+                "- moving: 'A cyclist is moving on your right. Maintain your path.'\n\n"
+                f"Motion-based assessments:\n{_format_ani_assessments(ani_assessments)}\n\n"
+                "Provide anticipatory guidance:"
+            )
+    elif has_emergency:
         # Emergency mode: Immediate danger warning with action command
         prompt = (
             "You are an assistive AI for visually impaired people. "
