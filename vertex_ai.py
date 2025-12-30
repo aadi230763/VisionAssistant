@@ -43,7 +43,7 @@ def _get_client() -> genai.Client:
 
 
 def _format_detections(detections: list[dict[str, Any]], max_items: int = 10) -> str:
-    """Format detection results for the AI prompt."""
+    """Format detection results for the AI prompt with depth information."""
     if not detections:
         return "No objects detected."
     
@@ -51,9 +51,27 @@ def _format_detections(detections: list[dict[str, Any]], max_items: int = 10) ->
     for d in detections[:max_items]:
         label = str(d.get("label", "object")).strip() or "object"
         conf = float(d.get("confidence", 0.0))
-        lines.append(f"- {label.title()} ({int(conf * 100)}%)")
+        
+        # Add depth information if available
+        distance = d.get("distance")
+        direction = d.get("direction")
+        
+        if distance and direction:
+            lines.append(f"- {label.title()} ({direction}, {distance})")
+        else:
+            lines.append(f"- {label.title()}")
     
     return "\n".join(lines)
+
+
+def _has_very_close_hazard(detections: list[dict[str, Any]]) -> bool:
+    """Check if any detection is very close and safety-relevant."""
+    from depth_estimator import is_safety_relevant
+    
+    for d in detections:
+        if d.get("distance") == "very_close" and is_safety_relevant(d.get("label", "")):
+            return True
+    return False
 
 
 def describe_scene(
@@ -78,6 +96,9 @@ def describe_scene(
     if not detections:
         return None
     
+    # Check for very close hazards (SAFETY OVERRIDE)
+    has_urgent_hazard = _has_very_close_hazard(detections)
+    
     # Check for emergency situations (high priority)
     emergency_objects = {
         'car', 'truck', 'bus', 'motorcycle', 'vehicle',
@@ -87,41 +108,58 @@ def describe_scene(
     detected_labels = {d.get('label', '').lower() for d in detections}
     has_emergency = bool(detected_labels & emergency_objects)
     
+    # Upgrade to emergency if very close hazard
+    if has_urgent_hazard:
+        has_emergency = True
+    
     # Build the prompt - optimized for actionable navigation guidance
     if has_emergency:
-        # Emergency mode: urgent, directive warning
+        # Emergency mode: Immediate danger warning with action command
         prompt = (
-            "URGENT: You are providing emergency navigation guidance to a visually impaired person.\n\n"
-            "CRITICAL INSTRUCTIONS:\n"
-            "1. Start with 'Warning.' or 'Caution.'\n"
-            "2. State the danger clearly (vehicle, moving object, hazard)\n"
-            "3. Give ONE immediate action: Stop, Step back, Stay still, Move aside\n"
-            "4. Be firm but calm\n"
-            "5. Maximum 2 short sentences\n\n"
+            "You are an assistive AI for visually impaired people. "
+            "An emergency hazard has been detected. Provide IMMEDIATE safety guidance.\n\n"
+            "URGENT RULES:\n"
+            "1. Start with 'Warning' or 'Caution'\n"
+            "2. State the object type and location (left/right/ahead)\n"
+            "3. Give ONE clear action: 'Step back', 'Stop', 'Move right'\n"
+            "4. If distance is 'very_close', emphasize urgency\n"
+            "5. Use approximate language: 'very close', 'right beside you', 'immediately ahead'\n"
+            "6. Be firm but calm\n"
+            "7. Maximum 2 short sentences\n\n"
+            "DISTANCE MEANINGS:\n"
+            "- very_close: Within arm's reach, immediate danger\n"
+            "- close: A few steps away\n"
+            "- moderate: Several steps away\n"
+            "- far: Not an immediate concern\n\n"
             "EXAMPLES:\n"
-            "- 'Warning. Vehicle approaching. Please stop immediately.'\n"
-            "- 'Caution. Car very close on your right. Step back and wait.'\n"
-            "- 'Warning. Bicycle ahead. Stop and let it pass.'\n\n"
+            "- 'Warning. Vehicle very close on your right. Step back immediately.'\n"
+            "- 'Caution. Person directly ahead, very close. Please stop.'\n"
+            "- 'Warning. Bicycle approaching from the left. Stop and wait.'\n\n"
             f"Detected objects:\n{_format_detections(detections)}\n\n"
             "Provide urgent safety guidance:"
         )
     else:
-        # Normal mode: decisive, actionable guidance
+        # Normal mode: decisive, actionable guidance with distance awareness
         prompt = (
             "You are an assistive AI for visually impaired people. "
             "Your role is to provide decisive, actionable navigation guidance.\n\n"
             "CRITICAL RULES:\n"
-            "1. Always use directional language: left/right, ahead/behind, near/far\n"
-            "2. Use distance estimates: one step, two steps, a few steps, close by, nearby\n"
-            "3. When obstacles are present, suggest ONE specific direction (not 'left or right' - choose one)\n"
-            "4. Be decisive: 'Move slightly right' not 'move left or right depending on space'\n"
-            "5. Keep it to 1-2 sentences maximum\n"
-            "6. Be calm and reassuring\n\n"
-            "EXAMPLES OF DECISIVE GUIDANCE:\n"
-            "- 'A person is ahead and a chair is to your left. Move one step right.'\n"
-            "- 'There is a table slightly ahead. Keep left to avoid it.'\n"
+            "1. Use directional language: left/right, ahead/behind\n"
+            "2. Convert distance categories into approximate language:\n"
+            "   - very_close → 'very close', 'right beside you', 'within arm's reach'\n"
+            "   - close → 'a few steps away', 'nearby'\n"
+            "   - moderate → 'several steps ahead'\n"
+            "   - far → mention only if safety-relevant\n"
+            "3. When obstacles are close or very_close, suggest ONE specific direction to avoid them\n"
+            "4. Be decisive: 'Move slightly right' not 'move left or right'\n"
+            "5. NEVER say exact distances in meters or feet\n"
+            "6. Keep it to 1-2 sentences maximum\n"
+            "7. Be calm and reassuring\n\n"
+            "EXAMPLES OF GOOD GUIDANCE:\n"
+            "- 'A person is a few steps ahead on the left. Move slightly right.'\n"
+            "- 'There is a chair very close on your left. Please stop and step right.'\n"
             "- 'The path ahead is clear. You can walk forward safely.'\n"
-            "- 'A bottle is on the ground two steps ahead. Step to the right.'\n\n"
+            "- 'A table is nearby, slightly ahead. Keep to the left depending on space.'\n\n"
             f"Detected objects:\n{_format_detections(detections)}\n\n"
             "Provide decisive navigation guidance:"
         )

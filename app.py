@@ -13,6 +13,7 @@ from camera import get_frames
 from elevenlabs_tts import speak
 from vertex_ai import describe_scene
 from yolo_detector import YoloDetector
+from depth_estimator import initialize_depth_model, estimate_depth
 
 load_dotenv()
 
@@ -76,6 +77,17 @@ def main():
 
     process_every_n_frames = int(os.getenv("PROCESS_EVERY_N_FRAMES", "15"))
     yolo_model = os.getenv("YOLO_MODEL", "yolo11n.pt")
+    # Enable depth estimation
+    use_depth = os.getenv("USE_DEPTH_ESTIMATION", "true").lower() == "true"
+    depth_enabled = False
+    if use_depth:
+        print("[app] Initializing depth estimation...")
+        depth_enabled = initialize_depth_model("midas_small")
+        if depth_enabled:
+            print("[app] Depth estimation enabled")
+        else:
+            print("[app] Depth estimation failed, continuing without depth")
+    
     yolo_conf = float(os.getenv("YOLO_CONF", "0.35"))
 
     detector = YoloDetector(model=yolo_model, conf=yolo_conf)
@@ -117,7 +129,14 @@ def main():
             jacc = len(sa & sb) / max(1, len(sa | sb))
             if jacc >= 0.8:
                 return True
-        return False
+        # Estimate depth if enabled
+        depth_map = None
+        if depth_enabled:
+            depth_map = estimate_depth(frame)
+            if depth_map is None:
+                print("[app] depth estimation failed for this frame")
+
+        detections = detector.detect(frame, depth_map=depth_map)
 
     last_detection_key_lock = threading.Lock()
     last_detection_key: tuple | None = None
@@ -140,23 +159,30 @@ def main():
         for s in recent_label_sets:
             counts.update(s)
 
-        stable_labels = {label for label, c in counts.items() if c >= smoothing_min_hits}
-        if not stable_labels:
-            print("[yolo] no stable detections")
-            return None
-
+        stable_labels = [label for label, count in counts.items() if count >= smoothing_min_hits]
         stable_detections = [d for d in detections if d["label"] in stable_labels]
 
+        # Check for very close hazards (SAFETY OVERRIDE)
+        has_urgent_hazard = any(
+            d.get("distance") == "very_close" 
+            for d in stable_detections
+        )
+
         # Treat "unchanged" as same stabilized labels (ignore confidence jitter)
+        # But override for very close hazards
         detection_key = tuple(sorted(stable_labels))
 
         with last_detection_key_lock:
-            if last_detection_key == detection_key:
+            if last_detection_key == detection_key and not has_urgent_hazard:
                 if force_narration_every_s > 0 and (time.time() - last_ai_ts) >= force_narration_every_s:
                     pass
                 else:
                     print("[app] detections unchanged; skipping AI")
                     return None
+            
+            # If urgent hazard, always process regardless of detection key
+            if has_urgent_hazard:
+                print("[app] URGENT: Very close hazard detected")
 
         text = describe_scene(stable_detections)
         if not text:
@@ -173,8 +199,9 @@ def main():
     pending: Future | None = None
 
     frame_idx = 0
+    camera_index = int(os.getenv("CAMERA_INDEX", "0"))
     try:
-        for frame in get_frames():
+        for frame in get_frames(camera_index):
             frame_idx += 1
 
             if frame_idx % process_every_n_frames != 0:

@@ -3,3 +3,5 @@ ultralytics
 requests
 python-dotenv
 google-genai
+torch
+torchvision

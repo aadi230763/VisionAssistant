@@ -1,5 +1,5 @@
 import os
-from typing import Any
+from typing import Any, Optional
 
 
 class YoloDetector:
@@ -19,7 +19,17 @@ class YoloDetector:
 
         self._model = YOLO(self.model_path)
 
-    def detect(self, frame) -> list[dict[str, Any]]:
+    def detect(self, frame, depth_map: Optional[Any] = None) -> list[dict[str, Any]]:
+        """
+        Detect objects in frame and optionally add depth information.
+        
+        Args:
+            frame: Input frame
+            depth_map: Optional depth map from depth_estimator
+        
+        Returns:
+            List of detections with optional depth info
+        """
         results = self._model.predict(
             source=frame,
             conf=self.conf,
@@ -35,16 +45,44 @@ class YoloDetector:
             return []
 
         names = getattr(r0, "names", None) or getattr(self._model, "names", None) or {}
+        
+        # Get frame dimensions for direction calculation
+        frame_height, frame_width = frame.shape[:2]
 
-        aggregated: dict[str, float] = {}
+        aggregated: dict[str, dict] = {}
         for box in r0.boxes:
             cls = int(box.cls.item()) if hasattr(box.cls, "item") else int(box.cls)
             conf = float(box.conf.item()) if hasattr(box.conf, "item") else float(box.conf)
             label = names.get(cls, str(cls))
-            prev = aggregated.get(label)
-            if prev is None or conf > prev:
-                aggregated[label] = conf
+            
+            # Get bounding box coordinates
+            bbox = box.xyxy[0].cpu().numpy() if hasattr(box.xyxy[0], 'cpu') else box.xyxy[0]
+            
+            # Add depth information if available
+            depth_info = {}
+            if depth_map is not None:
+                try:
+                    from depth_estimator import compute_bbox_depth, get_object_direction
+                    
+                    median_depth, distance_bucket = compute_bbox_depth(depth_map, bbox)
+                    direction = get_object_direction(bbox, frame_width)
+                    
+                    depth_info = {
+                        "distance": distance_bucket,
+                        "direction": direction,
+                        "depth_value": median_depth
+                    }
+                except Exception as e:
+                    print(f"[yolo] depth integration error: {e}")
+            
+            # Keep highest confidence detection per label
+            if label not in aggregated or conf > aggregated[label]["confidence"]:
+                aggregated[label] = {
+                    "label": label,
+                    "confidence": conf,
+                    **depth_info
+                }
 
-        detections = [{"label": label, "confidence": conf} for label, conf in aggregated.items()]
+        detections = list(aggregated.values())
         detections.sort(key=lambda d: (-d["confidence"], d["label"]))
         return detections
