@@ -1,0 +1,8 @@
+# Don't include demo video in git (it's large)
+data/demo_video.mp4
+data/*.mp4
+data/*.avi
+data/*.mov
+
+# Keep the folder structure
+!data/.gitkeep

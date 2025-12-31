@@ -5,9 +5,13 @@ function App() {
   const [objects, setObjects] = useState([]);
   const [guidance, setGuidance] = useState('');
   const [isThinking, setIsThinking] = useState(false);
+  const [cameraEnabled, setCameraEnabled] = useState(false);
   const wsRef = useRef(null);
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
   const lastSpokenRef = useRef('');
   const lastSpeakTimeRef = useRef(0);
+  const frameIntervalRef = useRef(null);
 
   // Function to speak text
   const speak = (text) => {
@@ -33,9 +37,63 @@ function App() {
     }
   };
 
+  // Start browser camera
+  const startCamera = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 640, height: 480, facingMode: 'environment' }
+      });
+      
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play();
+        setCameraEnabled(true);
+        console.log('📹 Browser camera started');
+      }
+    } catch (err) {
+      console.error('Camera access denied:', err);
+      alert('Please allow camera access for real-time detection');
+    }
+  };
+
+  // Send frames to backend
+  const sendFrame = () => {
+    if (!videoRef.current || !canvasRef.current || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+
+    // Draw video frame to canvas
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0);
+
+    // Convert to base64 and send
+    const frameData = canvas.toDataURL('image/jpeg', 0.7);
+    
+    try {
+      wsRef.current.send(JSON.stringify({
+        type: 'frame',
+        frame: frameData
+      }));
+    } catch (err) {
+      console.error('Error sending frame:', err);
+    }
+  };
+
   useEffect(() => {
+    // Get WebSocket URL from environment or use localhost
+    const wsUrl = process.env.REACT_APP_WS_URL 
+      ? `wss://${process.env.REACT_APP_WS_URL.replace(/^https?:\/\//, '')}`
+      : 'ws://localhost:8765';
+    
+    console.log('Connecting to WebSocket:', wsUrl);
+    
     // Connect to backend WebSocket
-    const ws = new WebSocket('ws://localhost:8765');
+    const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
     ws.onmessage = (event) => {
@@ -65,7 +123,25 @@ function App() {
       startDemoMode();
     };
 
-    return () => ws.close();
+    ws.onopen = () => {
+      console.log('WebSocket connected');
+      // Start camera and frame sending
+      startCamera();
+      
+      // Send frames at ~10 FPS
+      frameIntervalRef.current = setInterval(sendFrame, 100);
+    };
+
+    return () => {
+      ws.close();
+      if (frameIntervalRef.current) {
+        clearInterval(frameIntervalRef.current);
+      }
+      // Stop camera
+      if (videoRef.current && videoRef.current.srcObject) {
+        videoRef.current.srcObject.getTracks().forEach(track => track.stop());
+      }
+    };
   }, []);
 
   const startDemoMode = () => {
@@ -104,6 +180,10 @@ function App() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-black to-gray-900 p-6">
+      {/* Hidden video and canvas for camera capture */}
+      <video ref={videoRef} style={{ display: 'none' }} playsInline />
+      <canvas ref={canvasRef} style={{ display: 'none' }} />
+      
       {/* Header */}
       <header className="mb-8">
         <h1 className="text-4xl font-bold text-center bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">

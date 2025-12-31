@@ -6,6 +6,7 @@ import asyncio
 import json
 import base64
 import cv2
+import numpy as np
 import websockets
 from typing import Set
 import os
@@ -34,17 +35,28 @@ print("✅ Models ready")
 last_guidance_time = 0
 GUIDANCE_INTERVAL = 10.0  # seconds
 accumulated_detections = []
+client_frames = {}  # Store frames from browser clients
 
 
 async def handle_client(websocket):
-    """Handle WebSocket client connection."""
+    """Handle WebSocket client connection and receive frames from browser."""
     connected_clients.add(websocket)
+    client_id = id(websocket)
     print(f"📱 Client connected. Total: {len(connected_clients)}")
     
     try:
-        await websocket.wait_closed()
+        async for message in websocket:
+            # Receive frames from browser camera
+            data = json.loads(message)
+            if data.get('type') == 'frame':
+                # Store the frame for processing
+                client_frames[client_id] = data.get('frame')
+    except Exception as e:
+        print(f"Error handling client: {e}")
     finally:
         connected_clients.remove(websocket)
+        if client_id in client_frames:
+            del client_frames[client_id]
         print(f"📱 Client disconnected. Total: {len(connected_clients)}")
 
 
@@ -143,8 +155,92 @@ async def generate_summary_guidance(detections_over_time):
     return '. '.join(summary_parts) + '.'
 
 
+async def process_browser_frames():
+    """Process frames from browser cameras."""
+    global last_guidance_time, accumulated_detections
+    
+    print("📹 Ready to process browser camera frames...")
+    frame_count = 0
+    
+    while True:
+        if not client_frames:
+            await asyncio.sleep(0.1)
+            continue
+        
+        # Get the most recent frame from any connected client
+        frame_b64 = list(client_frames.values())[0]
+        
+        try:
+            # Decode base64 frame from browser
+            frame_data = base64.b64decode(frame_b64.split(',')[1] if ',' in frame_b64 else frame_b64)
+            nparr = np.frombuffer(frame_data, np.uint8)
+            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            
+            if frame is None:
+                await asyncio.sleep(0.1)
+                continue
+            
+            frame_count += 1
+            if frame_count % 5 != 0:  # Process every 5th frame
+                await asyncio.sleep(0.033)
+                continue
+            
+            current_time = time.time()
+            
+            # Detect with depth
+            depth_map = estimate_depth(frame) if depth_enabled else None
+            detections = detector.detect(frame, depth_map=depth_map)
+            
+            # Prepare UI objects
+            ui_objects = []
+            guidance = ""
+            
+            if detections:
+                for det in detections[:8]:  # Show up to 8 objects
+                    risk = 'imminent' if det.get('distance') == 'very_close' else \
+                           'high' if det.get('distance') == 'close' else \
+                           'medium' if det.get('distance') == 'moderate' else 'low'
+                    
+                    ui_objects.append({
+                        'label': det['label'],
+                        'distance': det.get('distance', 'moderate'),
+                        'direction': det.get('direction', 'ahead'),
+                        'motion': 'stationary',
+                        'risk': risk,
+                        'bbox': det.get('bbox')
+                    })
+                
+                # Accumulate detections for summary
+                accumulated_detections.append(ui_objects)
+            
+            # Generate guidance summary every 10 seconds
+            time_since_last = current_time - last_guidance_time
+            if time_since_last >= GUIDANCE_INTERVAL:
+                guidance = await generate_summary_guidance(accumulated_detections)
+                last_guidance_time = current_time
+                accumulated_detections = []  # Reset for next interval
+                print(f"🔊 Summary: {guidance}")
+            
+            # Encode and send back
+            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            processed_frame_b64 = base64.b64encode(buffer).decode('utf-8')
+            
+            # Broadcast
+            await broadcast_frame({
+                'frame': processed_frame_b64,
+                'objects': ui_objects,
+                'spoken_guidance': guidance,
+                'thinking': False
+            })
+            
+        except Exception as e:
+            print(f"Error processing frame: {e}")
+        
+        await asyncio.sleep(0.033)  # ~30 FPS
+
+
 async def process_camera_stream():
-    """Process camera and broadcast to UI."""
+    """Process camera and broadcast to UI - FALLBACK for local/demo mode."""
     global last_guidance_time, accumulated_detections
     
     print("📹 Starting camera stream...")
@@ -210,10 +306,18 @@ async def process_camera_stream():
 
 async def main():
     """Start WebSocket server."""
-    server = await websockets.serve(handle_client, "localhost", 8765)
-    print("🌐 WebSocket server on ws://localhost:8765")
+    # Use browser camera mode if specified (for cloud deployment)
+    use_browser_camera = os.getenv("USE_BROWSER_CAMERA", "true").lower() == "true"
     
-    camera_task = asyncio.create_task(process_camera_stream())
+    server = await websockets.serve(handle_client, "0.0.0.0", 8765)
+    print("🌐 WebSocket server on ws://0.0.0.0:8765")
+    
+    if use_browser_camera:
+        print("📱 Browser camera mode - waiting for client frames")
+        camera_task = asyncio.create_task(process_browser_frames())
+    else:
+        print("🎥 Local camera mode - using device camera")
+        camera_task = asyncio.create_task(process_camera_stream())
     
     await asyncio.gather(server.wait_closed(), camera_task)
 
