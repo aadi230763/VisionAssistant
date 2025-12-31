@@ -19,7 +19,6 @@ from elevenlabs_tts import speak
 from vertex_ai import describe_scene
 from yolo_detector import YoloDetector
 from depth_estimator import initialize_depth_model, estimate_depth
-from ani_engine import initialize_ani_engine, process_detections_with_ani
 
 load_dotenv()
 
@@ -96,21 +95,6 @@ def main():
         else:
             print("⚠️  Depth estimation failed, continuing without depth")
     
-    # Enable ANI (Anticipatory Navigation Intelligence)
-    use_ani = os.getenv("USE_ANI", "true").lower() == "true"
-    ani_enabled = False
-    if use_ani:
-        print("\n🧠 Initializing Anticipatory Navigation Intelligence...")
-        ani_enabled = initialize_ani_engine(
-            prediction_horizon_s=float(os.getenv("ANI_PREDICTION_HORIZON_S", "1.5")),
-            max_tracking_distance=float(os.getenv("ANI_MAX_TRACKING_DISTANCE", "0.3")),
-            max_missed_frames=int(os.getenv("ANI_MAX_MISSED_FRAMES", "5"))
-        )
-        if ani_enabled:
-            print("✅ ANI enabled (predictive motion tracking)")
-        else:
-            print("⚠️  ANI failed to initialize, continuing without motion tracking")
-    
     yolo_conf = float(os.getenv("YOLO_CONF", "0.35"))
 
     detector = YoloDetector(model=yolo_model, conf=yolo_conf)
@@ -174,34 +158,6 @@ def main():
             recent_label_sets.append(set())
             return None
 
-        # Apply ANI if enabled (motion tracking & risk assessment)
-        ani_assessments = None
-        if ani_enabled:
-            try:
-                frame_height, frame_width = frame.shape[:2]
-                ani_assessments = process_detections_with_ani(
-                    detections, 
-                    frame_width, 
-                    frame_height
-                )
-                
-                # Display ANI insights
-                if ani_assessments:
-                    high_risk = [a for a in ani_assessments if a.get("risk", "NONE") in ["HIGH", "IMMINENT"]]
-                    if high_risk:
-                        print(f"\n🧠 ANI: {len(high_risk)} high-risk object(s) detected")
-                        for a in high_risk:
-                            motion_emoji = {
-                                "approaching": "⚠️",
-                                "crossing": "↔️",
-                                "moving": "→",
-                                "stationary": "⏸️"
-                            }.get(a.get("motion", ""), "")
-                            print(f"   {motion_emoji} {a.get('object_type', 'object')}: {a.get('motion', 'unknown')} ({a.get('risk', 'NONE')})")
-            except Exception as e:
-                print(f"[ANI] Error processing: {e}")
-                ani_assessments = None
-
         labels_now = {d["label"] for d in detections}
         recent_label_sets.append(labels_now)
 
@@ -214,21 +170,10 @@ def main():
         stable_detections = [d for d in detections if d["label"] in stable_labels]
 
         # Check for very close hazards (SAFETY OVERRIDE)
-        # Now includes ANI imminent risk detection
         has_urgent_hazard = any(
             d.get("distance") == "very_close" 
             for d in stable_detections
         )
-        
-        # ANI imminent risk override
-        if ani_assessments:
-            has_imminent_ani_risk = any(
-                a.get("risk", "NONE") == "IMMINENT"
-                for a in ani_assessments
-            )
-            if has_imminent_ani_risk:
-                has_urgent_hazard = True
-                print("\n🚨 ANI IMMINENT RISK: Collision predicted!")
 
         # Treat "unchanged" as same stabilized labels (ignore confidence jitter)
         # But override for very close hazards
@@ -246,7 +191,7 @@ def main():
             if has_urgent_hazard:
                 print("\n🚨 URGENT: Very close hazard detected!")
 
-        text = describe_scene(stable_detections, ani_assessments=ani_assessments)
+        text = describe_scene(stable_detections)
         if not text:
             return None
 

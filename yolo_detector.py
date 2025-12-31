@@ -57,7 +57,6 @@ class YoloDetector:
             
             # Get bounding box coordinates
             bbox = box.xyxy[0].cpu().numpy() if hasattr(box.xyxy[0], 'cpu') else box.xyxy[0]
-            bbox_list = [float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])]
             
             # Add depth information if available
             depth_info = {}
@@ -80,12 +79,21 @@ class YoloDetector:
                 except Exception as e:
                     print(f"[yolo] depth integration error: {e}")
             
+            # Normalize bbox coordinates to 0-1 range for UI
+            x1, y1, x2, y2 = bbox
+            normalized_bbox = [
+                float(x1 / frame_width),
+                float(y1 / frame_height),
+                float(x2 / frame_width),
+                float(y2 / frame_height)
+            ]
+            
             # Keep highest confidence detection per label
             if label not in aggregated or conf > aggregated[label]["confidence"]:
                 aggregated[label] = {
                     "label": label,
                     "confidence": conf,
-                    "bbox": bbox_list,  # Include bbox for ANI tracking
+                    "bbox": normalized_bbox,
                     **depth_info
                 }
 

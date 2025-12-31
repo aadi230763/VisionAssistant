@@ -1,6 +1,6 @@
-# 🎯 Vision-to-Voice Assistant v3.0
+# 🎯 Vision-to-Voice Assistant
 
-An AI-powered assistive system that helps visually impaired users navigate their environment through real-time audio guidance with **depth-aware spatial intelligence** and **anticipatory navigation intelligence (ANI)**. Uses computer vision (YOLO), monocular depth estimation (MiDaS), temporal motion tracking, Google Vertex AI (Gemini), and ElevenLabs text-to-speech.
+An AI-powered assistive system that helps visually impaired users navigate their environment through real-time audio guidance with **depth-aware spatial intelligence**. Uses computer vision (YOLO), monocular depth estimation (MiDaS), Google Vertex AI (Gemini), and ElevenLabs text-to-speech.
 
 ---
 
@@ -9,14 +9,8 @@ An AI-powered assistive system that helps visually impaired users navigate their
 - **Real-time Object Detection**: YOLO11s detects objects in camera feed
 - **Depth-Aware Distance Estimation**: MiDaS provides relative distance (very close, close, moderate, far)
 - **Spatial Intelligence**: Direction awareness (left, right, ahead)
-- **🧠 Anticipatory Navigation Intelligence (ANI)**: 
-  - Temporal object tracking with persistent IDs
-  - Motion prediction (1.5s horizon)
-  - Proactive risk assessment before collision
-  - Motion classification (approaching, crossing, moving, stationary)
-  - 5-level risk scoring (NONE, LOW, MEDIUM, HIGH, IMMINENT)
-- **Smart AI Guidance**: Vertex AI (Gemini) provides actionable navigation instructions with distance and motion context
-- **Emergency Warnings**: Automatic urgent alerts for very close hazards and imminent collision predictions
+- **Smart AI Guidance**: Vertex AI (Gemini) provides actionable navigation instructions with distance context
+- **Emergency Warnings**: Automatic urgent alerts for very close hazards
 - **Natural Voice Output**: ElevenLabs TTS for high-quality speech
 - **Intelligent Filtering**: Prevents repetitive notifications
 - **Clean Terminal Output**: Color-coded emojis for easy monitoring
@@ -89,12 +83,6 @@ YOLO_CONF=0.35
 
 # Depth Estimation (Spatial Awareness)
 USE_DEPTH_ESTIMATION=true
-
-# Anticipatory Navigation Intelligence (ANI) - Predictive Motion Tracking
-USE_ANI=true
-ANI_PREDICTION_HORIZON_S=1.5
-ANI_MAX_TRACKING_DISTANCE=0.3
-ANI_MAX_MISSED_FRAMES=5
 
 # Frame Processing Settings
 PROCESS_EVERY_N_FRAMES=15
