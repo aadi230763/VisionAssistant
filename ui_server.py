@@ -9,6 +9,8 @@ import cv2
 import websockets
 from typing import Set
 import os
+import time
+from collections import defaultdict
 from dotenv import load_dotenv
 
 from camera import get_frames
@@ -27,6 +29,11 @@ detector = YoloDetector(
     conf=float(os.getenv("YOLO_CONF", "0.35"))
 )
 print("✅ Models ready")
+
+# Tracking state for 10-second summaries
+last_guidance_time = 0
+GUIDANCE_INTERVAL = 10.0  # seconds
+accumulated_detections = []
 
 
 async def handle_client(websocket):
@@ -51,8 +58,95 @@ async def broadcast_frame(data):
         )
 
 
+async def generate_summary_guidance(detections_over_time):
+    """Generate a comprehensive 10-second summary of the environment."""
+    if not detections_over_time:
+        return "Environment clear. Safe to proceed."
+    
+    # Aggregate all detections from the 10-second window
+    all_objects = []
+    for detection_set in detections_over_time:
+        for obj in detection_set:
+            all_objects.append(obj)
+    
+    # Remove duplicates by keeping closest detection for each position
+    # (but keep multiple instances of same label if in different positions)
+    unique_objects = []
+    for obj in all_objects:
+        # Check if similar object already exists (same label, similar direction, similar distance)
+        is_duplicate = False
+        for existing in unique_objects:
+            if (existing['label'] == obj['label'] and 
+                existing['direction'] == obj['direction'] and 
+                existing['distance'] == obj['distance']):
+                is_duplicate = True
+                break
+        if not is_duplicate:
+            unique_objects.append(obj)
+    
+    # Categorize by risk
+    very_close = [o for o in unique_objects if o['distance'] == 'very_close']
+    close = [o for o in unique_objects if o['distance'] == 'close']
+    moderate = [o for o in unique_objects if o['distance'] == 'moderate']
+    
+    # Count people specifically
+    people_very_close = [o for o in very_close if o['label'] == 'person']
+    people_close = [o for o in close if o['label'] == 'person']
+    
+    # Build comprehensive summary
+    summary_parts = []
+    
+    # Critical warnings first
+    if very_close:
+        if len(people_very_close) > 1:
+            directions = ', '.join(set(o['direction'] for o in people_very_close[:3]))
+            summary_parts.append(f"Danger! {len(people_very_close)} people very close at {directions}. Stop now")
+        elif len(very_close) == 1:
+            obj = very_close[0]
+            summary_parts.append(f"Danger! {obj['label']} very close {obj['direction']}. Stop now")
+        else:
+            items = ', '.join(o['label'] for o in very_close[:2])
+            summary_parts.append(f"Danger! {items} very close. Stop immediately")
+    
+    # Close objects
+    if close:
+        if len(people_close) > 1:
+            summary_parts.append(f"{len(people_close)} people nearby")
+        elif len(close) == 1:
+            obj = close[0]
+            summary_parts.append(f"{obj['label']} close {obj['direction']}")
+        elif len(close) == 2:
+            summary_parts.append(f"{close[0]['label']} and {close[1]['label']} close")
+        else:
+            summary_parts.append(f"{len(close)} objects nearby")
+    
+    # Moderate distance awareness
+    if moderate and not very_close and not close:
+        people_moderate = [o for o in moderate if o['label'] == 'person']
+        if len(people_moderate) > 1:
+            summary_parts.append(f"{len(people_moderate)} people detected at safe distance")
+        elif len(moderate) == 1:
+            summary_parts.append(f"{moderate[0]['label']} ahead at moderate distance")
+        else:
+            summary_parts.append(f"{len(moderate)} objects detected at safe distance")
+    
+    # Overall safety assessment
+    if very_close:
+        summary_parts.append("Proceed with extreme caution")
+    elif close:
+        summary_parts.append("Slow down and be careful")
+    elif moderate:
+        summary_parts.append("Environment safe, stay alert")
+    else:
+        summary_parts.append("All clear")
+    
+    return '. '.join(summary_parts) + '.'
+
+
 async def process_camera_stream():
     """Process camera and broadcast to UI."""
+    global last_guidance_time, accumulated_detections
+    
     print("📹 Starting camera stream...")
     camera_index = int(os.getenv("CAMERA_INDEX", "0"))
     frame_count = 0
@@ -62,6 +156,8 @@ async def process_camera_stream():
         
         if frame_count % 5 != 0:  # Process every 5th frame for better detection
             continue
+        
+        current_time = time.time()
         
         # Encode frame
         _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
@@ -90,29 +186,18 @@ async def process_camera_stream():
                     'bbox': det.get('bbox')
                 })
             
-            # Generate comprehensive guidance based on all detected objects
-            very_close = [o for o in ui_objects if o['distance'] == 'very_close']
-            close = [o for o in ui_objects if o['distance'] == 'close']
-            
-            if very_close:
-                if len(very_close) == 1:
-                    obj = very_close[0]
-                    guidance = f"Warning! {obj['label'].capitalize()} very close {obj['direction']}. Stop immediately."
-                else:
-                    directions = ', '.join(set(o['direction'] for o in very_close[:3]))
-                    guidance = f"Warning! Multiple objects very close: {directions}. Stop now!"
-            elif close:
-                if len(close) == 1:
-                    obj = close[0]
-                    guidance = f"{obj['label'].capitalize()} close {obj['direction']}. Slow down and proceed with caution."
-                else:
-                    # List multiple close objects
-                    objects_desc = ', '.join(f"{o['label']} {o['direction']}" for o in close[:3])
-                    guidance = f"Multiple objects nearby: {objects_desc}. Move carefully."
-            elif len(ui_objects) >= 3:
-                guidance = f"Detecting {len(ui_objects)} objects in environment. Stay alert."
+            # Accumulate detections for summary
+            accumulated_detections.append(ui_objects)
         
-        # Broadcast
+        # Generate guidance summary every 3 seconds
+        time_since_last = current_time - last_guidance_time
+        if time_since_last >= GUIDANCE_INTERVAL:
+            guidance = await generate_summary_guidance(accumulated_detections)
+            last_guidance_time = current_time
+            accumulated_detections = []  # Reset for next interval
+            print(f"🔊 Summary: {guidance}")
+        
+        # Broadcast (only include guidance when it's time)
         await broadcast_frame({
             'frame': frame_b64,
             'objects': ui_objects,

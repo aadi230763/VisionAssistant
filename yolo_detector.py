@@ -49,7 +49,8 @@ class YoloDetector:
         # Get frame dimensions for direction calculation
         frame_height, frame_width = frame.shape[:2]
 
-        aggregated: dict[str, dict] = {}
+        # Keep ALL detections (don't aggregate by label to detect multiple people)
+        all_detections = []
         for box in r0.boxes:
             cls = int(box.cls.item()) if hasattr(box.cls, "item") else int(box.cls)
             conf = float(box.conf.item()) if hasattr(box.conf, "item") else float(box.conf)
@@ -88,15 +89,14 @@ class YoloDetector:
                 float(y2 / frame_height)
             ]
             
-            # Keep highest confidence detection per label
-            if label not in aggregated or conf > aggregated[label]["confidence"]:
-                aggregated[label] = {
-                    "label": label,
-                    "confidence": conf,
-                    "bbox": normalized_bbox,
-                    **depth_info
-                }
+            # Add ALL detections to list (including multiple of same type)
+            all_detections.append({
+                "label": label,
+                "confidence": conf,
+                "bbox": normalized_bbox,
+                **depth_info
+            })
 
-        detections = list(aggregated.values())
-        detections.sort(key=lambda d: (-d["confidence"], d["label"]))
-        return detections
+        # Sort by confidence (highest first)
+        all_detections.sort(key=lambda d: -d["confidence"])
+        return all_detections

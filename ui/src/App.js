@@ -7,20 +7,27 @@ function App() {
   const [isThinking, setIsThinking] = useState(false);
   const wsRef = useRef(null);
   const lastSpokenRef = useRef('');
+  const lastSpeakTimeRef = useRef(0);
 
   // Function to speak text
   const speak = (text) => {
-    if ('speechSynthesis' in window && text && text !== lastSpokenRef.current) {
+    const now = Date.now();
+    const timeSinceLastSpeak = now - lastSpeakTimeRef.current;
+    
+    // Only speak if text is new AND at least 2 seconds have passed since last speech
+    if ('speechSynthesis' in window && text && 
+        (text !== lastSpokenRef.current || timeSinceLastSpeak > 2000)) {
       // Cancel any ongoing speech
       window.speechSynthesis.cancel();
       
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 1.0;
+      utterance.rate = 0.95;  // Slightly slower for clarity
       utterance.pitch = 1.0;
       utterance.volume = 1.0;
       
       window.speechSynthesis.speak(utterance);
       lastSpokenRef.current = text;
+      lastSpeakTimeRef.current = now;
       
       console.log('🔊 Speaking:', text);
     }
