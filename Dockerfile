@@ -29,8 +29,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Download smaller YOLO model for free tier (yolo11n instead of yolo11l)
-RUN python -c "from ultralytics import YOLO; YOLO('yolo11n.pt')"
+# Download YOLO model for Railway deployment
+RUN python -c "from ultralytics import YOLO; YOLO('yolo11m.pt')"
 
 # Expose port for WebSocket server
 EXPOSE 8765
