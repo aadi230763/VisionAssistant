@@ -29,8 +29,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Download YOLO model (so it doesn't download on every start)
-RUN python -c "from ultralytics import YOLO; YOLO('yolo11l.pt')"
+# Download smaller YOLO model for free tier (yolo11n instead of yolo11l)
+RUN python -c "from ultralytics import YOLO; YOLO('yolo11n.pt')"
 
 # Expose port for WebSocket server
 EXPOSE 8765
@@ -38,6 +38,8 @@ EXPOSE 8765
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV USE_BROWSER_CAMERA=true
+ENV YOLO_MODEL=yolo11n.pt
+ENV USE_DEPTH_ESTIMATION=false
 
 # Run the application
 CMD ["python", "ui_server.py"]
